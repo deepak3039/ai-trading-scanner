@@ -32,7 +32,12 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
+          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_SECRET_KEY: ${{ secrets.BINANCE_SECRET_KEY }}
         run: python scanner.py
+
+      - name: Run Performance Analytics
+        run: python analytics.py
 
       - name: Commit and Push Changes
         run: |
@@ -40,7 +45,7 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           if [ -f trade_log.csv ]; then
             git add trade_log.csv
-            git diff --quiet && git diff --staged --quiet || (git commit -m "Update trade log" && git push)
+            git diff --quiet && git diff --staged --quiet || (git commit -m "Update trade log and performance metrics" && git push)
           else
             echo "No trade log file found to commit."
           fi

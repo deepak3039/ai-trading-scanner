@@ -1,93 +1,97 @@
 import os
 import pandas as pd
-import plotly.express as px
 import streamlit as st
 
-# Streamlit Page Setup
 st.set_page_config(
-    page_title="AI Trading Bot Dashboard", page_icon="🤖", layout="wide"
-)
-
-st.title("🤖 AI Trading Scanner & Telemetry Dashboard")
-st.write(
-    "Live paper trading analytics and multi-asset signals powered by Machine"
-    " Learning & Smart Money Concepts."
+    page_title="AI Trading Scanner Dashboard", page_icon="📈", layout="wide"
 )
 
 LOG_FILE = "trade_log.csv"
 
-if not os.path.exists(LOG_FILE):
-  st.warning(
-      "⚠️ No `trade_log.csv` file found yet. Let your GitHub Actions workflow"
-      " run to populate trade data."
-  )
+st.title("📈 AI Multi-Asset Trading Scanner Dashboard")
+st.markdown(
+    "Monitor live AI-generated signals, adjust confidence thresholds, and filter"
+    " by asset and direction in real time."
+)
+
+
+@st.cache_data(ttl=30)
+def load_data():
+    if os.path.exists(LOG_FILE):
+        df = pd.read_csv(LOG_FILE)
+        return df
+    return pd.DataFrame()
+
+
+df = load_data()
+
+if df.empty:
+    st.warning(
+        "⚠️ No trade logs found yet. Run your GitHub Actions workflow to"
+        " generate signals!"
+    )
 else:
-  df = pd.read_csv(LOG_FILE)
+    # --- SIDEBAR CONTROLS & FILTERS ---
+    st.sidebar.header("🎛️ Dashboard Controls & Filters")
 
-  if df.empty:
-    st.warning("⚠️ `trade_log.csv` is currently empty.")
-  else:
-    # --- Top Metrics Row ---
-    st.subheader("📌 Key Performance Indicators")
+    # Confidence Threshold Slider
+    if "Confidence_%" in df.columns:
+        selected_conf = st.sidebar.slider(
+            "Minimum AI Confidence (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=60.0,
+            step=1.0,
+        )
+    else:
+        selected_conf = 0.0
+
+    # Direction Filter
+    directions = (
+        ["ALL"] + list(df["Direction"].unique())
+        if "Direction" in df.columns
+        else ["ALL"]
+    )
+    selected_direction = st.sidebar.selectbox(
+        "Filter by Direction", directions
+    )
+
+    # Asset Multi-select Filter
+    all_assets = list(df["Asset"].unique()) if "Asset" in df.columns else []
+    selected_assets = st.sidebar.multiselect(
+        "Filter by Assets", all_assets, default=all_assets
+    )
+
+    # --- APPLY FILTERS ---
+    filtered_df = df.copy()
+
+    if "Asset" in filtered_df.columns and selected_assets:
+        filtered_df = filtered_df[filtered_df["Asset"].isin(selected_assets)]
+
+    if "Direction" in filtered_df.columns and selected_direction != "ALL":
+        filtered_df = filtered_df[filtered_df["Direction"] == selected_direction]
+
+    if "Confidence_%" in filtered_df.columns:
+        filtered_df = filtered_df[filtered_df["Confidence_%"] >= selected_conf]
+
+    # --- TOP METRICS ROW ---
     col1, col2, col3, col4 = st.columns(4)
-
-    total_trades = len(df)
-    unique_assets = df["Asset"].nunique()
-    avg_confidence = (
-        df["Confidence_%"].mean() if "Confidence_%" in df.columns else 0
-    )
-    executed_trades = (
-        len(df[df["Status"] == "EXECUTED"]) if "Status" in df.columns else 0
-    )
-
-    col1.metric("Total Signals Logged", total_trades)
-    col2.metric("Assets Monitored", unique_assets)
-    col3.metric("Avg AI Confidence", f"{avg_confidence:.1f}%")
-    col4.metric("Testnet Orders Executed", executed_trades)
+    col1.metric("Total Signals Logged", len(df))
+    col2.metric("Filtered Signals Shown", len(filtered_df))
+    if "Confidence_%" in filtered_df.columns and not filtered_df.empty:
+        avg_conf = filtered_df["Confidence_%"].mean()
+        col3.metric("Avg Filtered Confidence", f"{avg_conf:.1f}%")
+    else:
+        col3.metric("Avg Filtered Confidence", "N/A")
+    col4.metric("Active Assets Tracked", len(all_assets))
 
     st.divider()
 
-    # --- Charts Section ---
-    col_left, col_right = st.columns(2)
-
-    with col_left:
-      st.subheader("📊 Bullish vs Bearish Ratio")
-      if "Direction" in df.columns:
-        fig_dir = px.pie(
-            df,
-            names="Direction",
-            title="Signal Direction Distribution",
-            color="Direction",
-            color_discrete_map={"BULLISH": "#00CC96", "BEARISH": "#EF553B"},
-            hole=0.4,
-        )
-        st.plotly_chart(fig_dir, use_container_width=True)
-
-    with col_right:
-      st.subheader("📈 Signal Volume by Asset")
-      if "Asset" in df.columns:
-        asset_counts = df["Asset"].value_counts().reset_index()
-        asset_counts.columns = ["Asset", "Count"]
-        fig_asset = px.bar(
-            asset_counts,
-            x="Asset",
-            y="Count",
-            title="Signals Detected Per Asset",
-            color="Count",
-            color_continuous_scale="Viridis",
-        )
-        st.plotly_chart(fig_asset, use_container_width=True)
-
-    st.divider()
-
-    # --- Data Filter & Table ---
-    st.subheader("📋 Interactive Trade Log Explorer")
-
-    selected_asset = st.multiselect(
-        "Filter by Asset:",
-        options=df["Asset"].unique(),
-        default=df["Asset"].unique(),
-    )
-    filtered_df = df[df["Asset"].isin(selected_asset)]
-
+    # --- MAIN INTERACTIVE TABLE ---
+    st.subheader("📊 Interactive Trade Log Explorer")
     st.dataframe(filtered_df, use_container_width=True)
+
+    # --- CHARTS & VISUALIZATIONS ---
+    if not filtered_df.empty and "Confidence_%" in filtered_df.columns:
+        st.subheader("📈 AI Confidence Breakdown by Asset")
+        st.bar_chart(filtered_df, x="Asset", y="Confidence_%")

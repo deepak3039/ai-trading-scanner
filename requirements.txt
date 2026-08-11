@@ -1,6 +1,8 @@
 ccxt
 numpy
 pandas
+pandas-ta
 requests
 scikit-learn
-pandas-ta==0.4.71b0
+streamlit
+plotly

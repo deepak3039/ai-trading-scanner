@@ -13,6 +13,10 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 ALPHA_VANTAGE_API_KEY = os.environ.get("ALPHA_VANTAGE_API_KEY")
 
+# Optional Paper Trading Credentials (Binance Testnet)
+BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY")
+BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY")
+
 CRYPTO_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
 LOG_FILE = "trade_log.csv"
 
@@ -26,12 +30,44 @@ def send_telegram_alert(message):
     print(f"❌ Error sending Telegram alert: {e}")
 
 
-def log_trade_to_csv(
-    timestamp, asset, direction, price, confidence, stop_loss, take_profit
-):
-  """Appends the generated trade setup to a local CSV audit log."""
-  file_exists = os.path.exists(LOG_FILE)
+def execute_paper_order(symbol, direction, price):
+  """Executes a simulated paper order on Binance Testnet via CCXT."""
+  if not BINANCE_API_KEY or not BINANCE_SECRET_KEY:
+    print("⚠️ Binance API keys missing. Skipping live paper execution.")
+    return "SKIPPED"
 
+  try:
+    exchange = ccxt.binance({
+        "apiKey": BINANCE_API_KEY,
+        "secret": BINANCE_SECRET_KEY,
+        "enableRateLimit": True,
+    })
+    exchange.set_sandbox_mode(True)  # Enable testnet sandbox
+
+    side = "buy" if direction == "BULLISH" else "sell"
+    amount = round(100 / price, 5)  # $100 virtual position size
+
+    order = exchange.create_order(
+        symbol=symbol, type="market", side=side, amount=amount
+    )
+    print(f"✅ Paper order executed successfully: {order.get('id')}")
+    return "EXECUTED"
+  except Exception as e:
+    print(f"❌ Paper execution error: {e}")
+    return "FAILED"
+
+
+def log_trade_to_csv(
+    timestamp,
+    asset,
+    direction,
+    price,
+    confidence,
+    stop_loss,
+    take_profit,
+    status,
+):
+  file_exists = os.path.exists(LOG_FILE)
   log_data = {
       "Timestamp": [timestamp],
       "Asset": [asset],
@@ -40,19 +76,17 @@ def log_trade_to_csv(
       "Confidence_%": [confidence],
       "Stop_Loss": [stop_loss],
       "Take_Profit": [take_profit],
-      "Status": ["OPEN"],
+      "Status": [status],
   }
-
   df_log = pd.DataFrame(log_data)
   df_log.to_csv(LOG_FILE, mode="a", index=False, header=not file_exists)
   print(f"📝 Logged trade for {asset} to {LOG_FILE}")
 
 
 def run_scan_cycle():
-  print("🤖 Executing AI Scan Cycle with Trade Logging...")
+  print("🤖 Executing AI Scan Cycle with Paper Trading Execution...")
   current_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 
-  # 1. Crypto Scan
   exchange = ccxt.binance({"enableRateLimit": True})
   for symbol in CRYPTO_SYMBOLS:
     try:
@@ -61,7 +95,6 @@ def run_scan_cycle():
           ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"]
       )
 
-      # Feature Engineering
       df["rsi"] = ta.rsi(df["close"], length=14)
       df["sma_50"] = ta.sma(df["close"], length=50)
       df["ma_dist"] = (df["close"] - df["sma_50"]) / df["sma_50"]
@@ -92,7 +125,6 @@ def run_scan_cycle():
 
       if confidence >= 60.0:
         direction = "BULLISH" if prediction == 1 else "BEARISH"
-
         if prediction == 1:
           stop_loss = current_price - (2 * current_atr)
           take_profit = current_price + (3 * current_atr)
@@ -100,20 +132,17 @@ def run_scan_cycle():
           stop_loss = current_price + (2 * current_atr)
           take_profit = current_price - (3 * current_atr)
 
-        # Send Telegram alert
+        order_status = execute_paper_order(symbol, direction, current_price)
+
         msg = (
-            f"🚨 *AI TRADE SETUP* 🚨\n\nAsset: `{symbol}`\nDirection:"
-            f" *{direction} 📈*"
-            if prediction == 1
-            else f"🚨 *AI TRADE SETUP* 🚨\n\nAsset:"
-            f" `{symbol}`\nDirection: *{direction} 📉*\nEntry Price:"
-            f" `{current_price:.2f}`\nAI Confidence: *{confidence:.1f}%*\n\n🛡️"
-            f" *Risk Management:*\nStop-Loss: `{stop_loss:.2f}`\nTake-Profit:"
+            f"🚨 *AI TRADE SETUP & EXECUTION* 🚨\n\nAsset: `{symbol}`\nDirection:"
+            f" *{direction}*\nEntry Price: `{current_price:.2f}`\nAI Confidence:"
+            f" *{confidence:.1f}%*\nOrder Status: *{order_status}*\n\n🛡️ *Risk"
+            f" Management:*\nStop-Loss: `{stop_loss:.2f}`\nTake-Profit:"
             f" `{take_profit:.2f}`"
         )
         send_telegram_alert(msg)
 
-        # Log to CSV
         log_trade_to_csv(
             current_time,
             symbol,
@@ -122,11 +151,12 @@ def run_scan_cycle():
             round(confidence, 1),
             round(stop_loss, 2),
             round(take_profit, 2),
+            order_status,
         )
     except Exception as e:
       print(f"Error processing {symbol}: {e}")
 
-  # 2. Commodity Scan (Gold via Alpha Vantage)
+  # Commodity Scan (Gold via Alpha Vantage)
   try:
     url = f"https://www.alphavantage.co/query?function=FX_DAILY&from_symbol=XAU&to_symbol=USD&apikey={ALPHA_VANTAGE_API_KEY}"
     response = requests.get(url)
@@ -163,8 +193,8 @@ def run_scan_cycle():
           take_profit = current_price - (3 * current_atr)
 
         msg = (
-            f"🚨 *COMMODITY TRADE SETUP* 🚨\n\nAsset: `XAU/USD"
-            f" (Gold)`\nCondition: *{cond} (RSI: {current_rsi:.2f})*\nPrice:"
+            f"🚨 *COMMODITY SETUP* 🚨\n\nAsset: `XAU/USD (Gold)`\nCondition:"
+            f" *{cond} (RSI: {current_rsi:.2f})*\nPrice:"
             f" `{current_price:.2f}`\n\n🛡️ *Risk"
             f" Management:*\nStop-Loss: `{stop_loss:.2f}`\nTake-Profit:"
             f" `{take_profit:.2f}`"
@@ -176,14 +206,14 @@ def run_scan_cycle():
             "XAU/USD",
             direction,
             current_price,
-            99.9,  # Rule-based confidence
+            99.9,
             round(stop_loss, 2),
             round(take_profit, 2),
+            "LOG_ONLY",
         )
   except Exception as e:
-            print(f"Alpha Vantage Error: {e}")
+    print(f"Alpha Vantage Error: {e}")
 
 
 if __name__ == "__main__":
-  print("Saved code executed successfully.")
   run_scan_cycle()

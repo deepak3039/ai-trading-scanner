@@ -1,6 +1,8 @@
+setuptools
+wheel
 streamlit
 pandas
-numpy<2.0
+numpy>=1.26.4,<2.0
 scikit-learn
 pandas-ta
 requests

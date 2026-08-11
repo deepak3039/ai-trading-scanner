@@ -12,8 +12,6 @@ from sklearn.model_selection import train_test_split
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 ALPHA_VANTAGE_API_KEY = os.environ.get("ALPHA_VANTAGE_API_KEY")
-
-# Optional Paper Trading Credentials (Binance Testnet)
 BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY")
 BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY")
 
@@ -31,7 +29,6 @@ def send_telegram_alert(message):
 
 
 def execute_paper_order(symbol, direction, price):
-  """Executes a simulated paper order on Binance Testnet via CCXT."""
   if not BINANCE_API_KEY or not BINANCE_SECRET_KEY:
     print("⚠️ Binance API keys missing. Skipping live paper execution.")
     return "SKIPPED"
@@ -42,10 +39,10 @@ def execute_paper_order(symbol, direction, price):
         "secret": BINANCE_SECRET_KEY,
         "enableRateLimit": True,
     })
-    exchange.set_sandbox_mode(True)  # Enable testnet sandbox
+    exchange.set_sandbox_mode(True)
 
     side = "buy" if direction == "BULLISH" else "sell"
-    amount = round(100 / price, 5)  # $100 virtual position size
+    amount = round(100 / price, 5)
 
     order = exchange.create_order(
         symbol=symbol, type="market", side=side, amount=amount
@@ -83,8 +80,63 @@ def log_trade_to_csv(
   print(f"📝 Logged trade for {asset} to {LOG_FILE}")
 
 
+def add_advanced_features(df):
+  """Engineers traditional indicators and smart money price action features."""
+  # 1. Momentum & Trend Indicators (pandas-ta)
+  df["rsi"] = ta.rsi(df["close"], length=14)
+  df["ema_20"] = ta.ema(df["close"], length=20)
+  df["ema_50"] = ta.ema(df["close"], length=50)
+  df["ema_200"] = ta.ema(df["close"], length=200)
+
+  macd_df = ta.macd(df["close"], fast=12, slow=26, signal=9)
+  if macd_df is not None and not macd_df.empty:
+    df["macd"] = macd_df.iloc[:, 0]
+    df["macd_hist"] = macd_df.iloc[:, 1]
+    df["macd_signal"] = macd_df.iloc[:, 2]
+  else:
+    df["macd"] = 0
+    df["macd_hist"] = 0
+    df["macd_signal"] = 0
+
+  bb_df = ta.bbands(df["close"], length=20, std=2)
+  if bb_df is not None and not bb_df.empty:
+    df["bb_lower"] = bb_df.iloc[:, 0]
+    df["bb_middle"] = bb_df.iloc[:, 1]
+    df["bb_upper"] = bb_df.iloc[:, 2]
+  else:
+    df["bb_lower"] = df["close"]
+    df["bb_middle"] = df["close"]
+    df["bb_upper"] = df["close"]
+
+  df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
+
+  # 2. Market Structure & Swing Highs/Lows (5-candle rolling window)
+  df["swing_high"] = df["high"][(df["high"] == df["high"].rolling(5, center=True).max())].fillna(0)
+  df["swing_low"] = df["low"][(df["low"] == df["low"].rolling(5, center=True).min())].fillna(0)
+
+  # 3. Support & Resistance Levels (Rolling 50-period min/max)
+  df["support"] = df["low"].rolling(window=50).min()
+  df["resistance"] = df["high"].rolling(window=50).max()
+
+  # 4. Fair Value Gap (FVG) Detection
+  # Bullish FVG: Low of candle[i] > High of candle[i-2]
+  df["bullish_fvg"] = (df["low"] > df["high"].shift(2)).astype(int)
+  # Bearish FVG: High of candle[i] < Low of candle[i-2]
+  df["bearish_fvg"] = (df["high"] < df["low"].shift(2)).astype(int)
+
+  # 5. Liquidity Sweep Approximation (Price breaks recent swing high/low then reverses)
+  df["prev_high"] = df["high"].shift(1).rolling(10).max()
+  df["prev_low"] = df["low"].shift(1).rolling(10).min()
+  df["liquidity_sweep_bullish"] = ((df["low"] < df["prev_low"]) & (df["close"] > df["open"])).astype(int)
+  df["liquidity_sweep_bearish"] = ((df["high"] > df["prev_high"]) & (df["close"] < df["open"])).astype(int)
+
+  # 6. Target Variable for Machine Learning (Next candle green = 1, red = 0)
+  df["target"] = (df["close"].shift(-1) > df["close"]).astype(int)
+  return df.dropna()
+
+
 def run_scan_cycle():
-  print("🤖 Executing AI Scan Cycle with Paper Trading Execution...")
+  print("🤖 Executing AI Scan Cycle with Advanced SMC & Technical Indicators...")
   current_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 
   exchange = ccxt.binance({"enableRateLimit": True})
@@ -94,21 +146,31 @@ def run_scan_cycle():
       df = pd.DataFrame(
           ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"]
       )
+      df = add_advanced_features(df)
 
-      df["rsi"] = ta.rsi(df["close"], length=14)
-      df["sma_50"] = ta.sma(df["close"], length=50)
-      df["ma_dist"] = (df["close"] - df["sma_50"]) / df["sma_50"]
-      df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
-      df["target"] = (df["close"].shift(-1) > df["close"]).astype(int)
-      df = df.dropna()
+      feature_columns = [
+          "rsi",
+          "ema_20",
+          "ema_50",
+          "macd",
+          "macd_hist",
+          "bb_lower",
+          "bb_upper",
+          "atr",
+          "bullish_fvg",
+          "bearish_fvg",
+          "liquidity_sweep_bullish",
+          "liquidity_sweep_bearish",
+          "volume",
+      ]
 
-      X = df[["rsi", "ma_dist", "atr", "volume"]]
+      X = df[feature_columns]
       y = df["target"]
 
       X_train, X_test, y_train, y_test = train_test_split(
           X, y, test_size=0.2, shuffle=False
       )
-      model = RandomForestClassifier(n_estimators=100, random_state=42)
+      model = RandomForestClassifier(n_estimators=150, random_state=42)
       model.fit(X_train, y_train)
 
       latest_features = X.iloc[[-1]]
@@ -135,8 +197,8 @@ def run_scan_cycle():
         order_status = execute_paper_order(symbol, direction, current_price)
 
         msg = (
-            f"🚨 *AI TRADE SETUP & EXECUTION* 🚨\n\nAsset: `{symbol}`\nDirection:"
-            f" *{direction}*\nEntry Price: `{current_price:.2f}`\nAI Confidence:"
+            f"🧠 *AI SMC & TECHNICAL SETUP* 🧠\n\nAsset: `{symbol}`\nDirection:"
+            f" *{direction}*\nPrice: `{current_price:.2f}`\nAI Confidence:"
             f" *{confidence:.1f}%*\nOrder Status: *{order_status}*\n\n🛡️ *Risk"
             f" Management:*\nStop-Loss: `{stop_loss:.2f}`\nTake-Profit:"
             f" `{take_profit:.2f}`"
@@ -155,64 +217,6 @@ def run_scan_cycle():
         )
     except Exception as e:
       print(f"Error processing {symbol}: {e}")
-
-  # Commodity Scan (Gold via Alpha Vantage)
-  try:
-    url = f"https://www.alphavantage.co/query?function=FX_DAILY&from_symbol=XAU&to_symbol=USD&apikey={ALPHA_VANTAGE_API_KEY}"
-    response = requests.get(url)
-    data = response.json()
-    time_series = data.get("Time Series FX (Daily)", {})
-
-    if time_series:
-      df = pd.DataFrame.from_dict(time_series, orient="index")
-      df = df.rename(
-          columns={
-              "1. open": "open",
-              "2. high": "high",
-              "3. low": "low",
-              "4. close": "close",
-          }
-      )
-      df = df.astype(float).sort_index()
-      df["rsi"] = ta.rsi(df["close"], length=14)
-      df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
-
-      current_rsi = df["rsi"].iloc[-1]
-      current_price = df["close"].iloc[-1]
-      current_atr = df["atr"].iloc[-1]
-
-      if current_rsi < 30 or current_rsi > 70:
-        cond = "OVERSOLD" if current_rsi < 30 else "OVERBOUGHT"
-        direction = "BULLISH" if current_rsi < 30 else "BEARISH"
-
-        if current_rsi < 30:
-          stop_loss = current_price - (2 * current_atr)
-          take_profit = current_price + (3 * current_atr)
-        else:
-          stop_loss = current_price + (2 * current_atr)
-          take_profit = current_price - (3 * current_atr)
-
-        msg = (
-            f"🚨 *COMMODITY SETUP* 🚨\n\nAsset: `XAU/USD (Gold)`\nCondition:"
-            f" *{cond} (RSI: {current_rsi:.2f})*\nPrice:"
-            f" `{current_price:.2f}`\n\n🛡️ *Risk"
-            f" Management:*\nStop-Loss: `{stop_loss:.2f}`\nTake-Profit:"
-            f" `{take_profit:.2f}`"
-        )
-        send_telegram_alert(msg)
-
-        log_trade_to_csv(
-            current_time,
-            "XAU/USD",
-            direction,
-            current_price,
-            99.9,
-            round(stop_loss, 2),
-            round(take_profit, 2),
-            "LOG_ONLY",
-        )
-  except Exception as e:
-    print(f"Alpha Vantage Error: {e}")
 
 
 if __name__ == "__main__":

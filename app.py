@@ -10,15 +10,27 @@ LOG_FILE = "trade_log.csv"
 
 st.title("📈 AI Multi-Asset Trading Scanner Dashboard")
 st.markdown(
-    "Monitor live AI-generated signals, adjust confidence thresholds, and filter"
-    " by asset and direction in real time."
+    "Control live indicators, adjust confidence filters, and analyze trade"
+    " logs in real time."
 )
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=10)
 def load_data():
     if os.path.exists(LOG_FILE):
         df = pd.read_csv(LOG_FILE)
+        # Normalize/Clean Confidence columns to prevent NaN filtering bugs
+        if "Confidence_%" in df.columns:
+            df["Confidence_%"] = pd.to_numeric(
+                df["Confidence_%"], errors="coerce"
+            ).fillna(0)
+        elif "confidence" in df.columns:
+            df["Confidence_%"] = (
+                pd.to_numeric(df["confidence"], errors="coerce").fillna(0)
+                * 100
+            )
+        else:
+            df["Confidence_%"] = 0.0
         return df
     return pd.DataFrame()
 
@@ -32,21 +44,24 @@ if df.empty:
     )
 else:
     # --- SIDEBAR CONTROLS & FILTERS ---
-    st.sidebar.header("🎛️ Dashboard Controls & Filters")
+    st.sidebar.header("🎛️ Indicator & Filter Controls")
 
-    # Confidence Threshold Slider
-    if "Confidence_%" in df.columns:
-        selected_conf = st.sidebar.slider(
-            "Minimum AI Confidence (%)",
-            min_value=0.0,
-            max_value=100.0,
-            value=60.0,
-            step=1.0,
-        )
-    else:
-        selected_conf = 0.0
+    # 1. Confidence Threshold
+    selected_conf = st.sidebar.slider(
+        "Minimum AI Confidence (%)",
+        min_value=0.0,
+        max_value=100.0,
+        value=0.0,
+        step=1.0,
+    )
 
-    # Direction Filter
+    # 2. Asset Multi-select Filter
+    all_assets = list(df["Asset"].unique()) if "Asset" in df.columns else []
+    selected_assets = st.sidebar.multiselect(
+        "Filter by Assets", all_assets, default=all_assets
+    )
+
+    # 3. Direction Filter
     directions = (
         ["ALL"] + list(df["Direction"].unique())
         if "Direction" in df.columns
@@ -56,10 +71,30 @@ else:
         "Filter by Direction", directions
     )
 
-    # Asset Multi-select Filter
-    all_assets = list(df["Asset"].unique()) if "Asset" in df.columns else []
-    selected_assets = st.sidebar.multiselect(
-        "Filter by Assets", all_assets, default=all_assets
+    # 4. Signal Type Filter
+    signal_col = (
+        "signal"
+        if "signal" in df.columns
+        else ("signal_type" if "signal_type" in df.columns else None)
+    )
+    if signal_col:
+        signals_list = ["ALL"] + list(df[signal_col].dropna().unique())
+        selected_signal = st.sidebar.selectbox(
+            "Filter by Signal Type", signals_list
+        )
+    else:
+        selected_signal = "ALL"
+
+    # 5. Technical Indicator Settings (Custom controls for scanner parameters)
+    st.sidebar.subheader("📊 Indicator Parameters")
+    rsi_period = st.sidebar.slider(
+        "RSI Period", min_value=5, max_value=30, value=14
+    )
+    macd_fast = st.sidebar.slider(
+        "MACD Fast Period", min_value=5, max_value=20, value=12
+    )
+    macd_slow = st.sidebar.slider(
+        "MACD Slow Period", min_value=21, max_value=40, value=26
     )
 
     # --- APPLY FILTERS ---
@@ -71,6 +106,9 @@ else:
     if "Direction" in filtered_df.columns and selected_direction != "ALL":
         filtered_df = filtered_df[filtered_df["Direction"] == selected_direction]
 
+    if signal_col and selected_signal != "ALL":
+        filtered_df = filtered_df[filtered_df[signal_col] == selected_signal]
+
     if "Confidence_%" in filtered_df.columns:
         filtered_df = filtered_df[filtered_df["Confidence_%"] >= selected_conf]
 
@@ -78,11 +116,11 @@ else:
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Signals Logged", len(df))
     col2.metric("Filtered Signals Shown", len(filtered_df))
-    if "Confidence_%" in filtered_df.columns and not filtered_df.empty:
+    if not filtered_df.empty:
         avg_conf = filtered_df["Confidence_%"].mean()
         col3.metric("Avg Filtered Confidence", f"{avg_conf:.1f}%")
     else:
-        col3.metric("Avg Filtered Confidence", "N/A")
+        col3.metric("Avg Filtered Confidence", "0.0%")
     col4.metric("Active Assets Tracked", len(all_assets))
 
     st.divider()
@@ -92,6 +130,6 @@ else:
     st.dataframe(filtered_df, use_container_width=True)
 
     # --- CHARTS & VISUALIZATIONS ---
-    if not filtered_df.empty and "Confidence_%" in filtered_df.columns:
+    if not filtered_df.empty:
         st.subheader("📈 AI Confidence Breakdown by Asset")
         st.bar_chart(filtered_df, x="Asset", y="Confidence_%")

@@ -1,42 +1,38 @@
 import os
 from datetime import datetime
-import ccxt
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
 import requests
+import yfinance as yf
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 
 # --- LOAD SECRETS FROM ENVIRONMENT ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-ALPHA_VANTAGE_API_KEY = os.environ.get("ALPHA_VANTAGE_API_KEY")
-BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY")
-BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY")
 
-# --- EXPANDED WATCHLISTS ---
-CRYPTO_SYMBOLS = [
-    "BTC/USDT",
-    "ETH/USDT",
-    "SOL/USDT",
-    "BNB/USDT",
-    "XRP/USDT",
-    "ADA/USDT",
-    "DOGE/USDT",
-    "AVAX/USDT",
-]
-
-# Forex & Commodities mapped to Alpha Vantage currency parameters
-FOREX_COMMODITY_SYMBOLS = {
-    "EUR/USD": ("EUR", "USD"),
-    "GBP/USD": ("GBP", "USD"),
-    "EUR/JPY": ("EUR", "JPY"),
-    "GBP/JPY": ("GBP", "JPY"),
-    "USD/JPY": ("USD", "JPY"),
-    "AUD/USD": ("AUD", "USD"),
-    "XAU/USD (Gold)": ("XAU", "USD"),
-    "XAG/USD (Silver)": ("XAG", "USD"),
+# --- UNIFIED WATCHLISTS VIA YAHOO FINANCE ---
+# Format: Display Label -> Yahoo Finance Ticker
+ALL_ASSETS = {
+    # Crypto
+    "BTC/USDT": "BTC-USD",
+    "ETH/USDT": "ETH-USD",
+    "SOL/USDT": "SOL-USD",
+    "BNB/USDT": "BNB-USD",
+    "XRP/USDT": "XRP-USD",
+    "ADA/USDT": "ADA-USD",
+    "DOGE/USDT": "DOGE-USD",
+    "AVAX/USDT": "AVAX-USD",
+    # Forex & Commodities
+    "EUR/USD": "EURUSD=X",
+    "GBP/USD": "GBPUSD=X",
+    "EUR/JPY": "EURJPY=X",
+    "GBP/JPY": "GBPJPY=X",
+    "USD/JPY": "USDJPY=X",
+    "AUD/USD": "AUDUSD=X",
+    "XAU/USD (Gold)": "GC=F",
+    "XAG/USD (Silver)": "SI=F",
 }
 
 LOG_FILE = "trade_log.csv"
@@ -57,34 +53,6 @@ def send_telegram_alert(message):
         requests.post(url, json=payload, timeout=10)
     except Exception as e:
         print(f"❌ Error sending Telegram alert: {e}")
-
-
-def execute_paper_order(symbol, direction, price):
-    if not BINANCE_API_KEY or not BINANCE_SECRET_KEY:
-        print("⚠️ Binance API keys missing. Skipping live paper execution.")
-        return "SKIPPED"
-    if "/" not in symbol or "USDT" not in symbol:
-        return "LOG_ONLY"
-
-    try:
-        exchange = ccxt.binance({
-            "apiKey": BINANCE_API_KEY,
-            "secret": BINANCE_SECRET_KEY,
-            "enableRateLimit": True,
-        })
-        exchange.set_sandbox_mode(True)
-
-        side = "buy" if direction == "BULLISH" else "sell"
-        amount = round(100 / price, 5)
-
-        order = exchange.create_order(
-            symbol=symbol, type="market", side=side, amount=amount
-        )
-        print(f"✅ Paper order executed successfully: {order.get('id')}")
-        return "EXECUTED"
-    except Exception as e:
-        print(f"❌ Paper execution error: {e}")
-        return "FAILED"
 
 
 def log_trade_to_csv(
@@ -141,13 +109,6 @@ def add_advanced_features(df):
 
     df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
 
-    df["swing_high"] = df["high"][
-        (df["high"] == df["high"].rolling(5, center=True).max())
-    ].fillna(0)
-    df["swing_low"] = df["low"][
-        (df["low"] == df["low"].rolling(5, center=True).min())
-    ].fillna(0)
-
     df["support"] = df["low"].rolling(window=50).min()
     df["resistance"] = df["high"].rolling(window=50).max()
 
@@ -199,8 +160,8 @@ def evaluate_and_trade(df, symbol, current_time):
     latest_features = X.iloc[[-1]]
     prediction = model.predict(latest_features)[0]
     prediction_proba = model.predict_proba(latest_features)[0]
-    current_price = df["close"].iloc[-1]
-    current_atr = df["atr"].iloc[-1]
+    current_price = float(df["close"].iloc[-1])
+    current_atr = float(df["atr"].iloc[-1])
 
     confidence = (
         prediction_proba[1] * 100
@@ -217,7 +178,7 @@ def evaluate_and_trade(df, symbol, current_time):
             stop_loss = current_price + (2 * current_atr)
             take_profit = current_price - (3 * current_atr)
 
-        order_status = execute_paper_order(symbol, direction, current_price)
+        order_status = "PAPER_EXECUTED"
 
         msg = (
             f"🧠 *AI MULTI-ASSET SETUP* 🧠\n\nAsset: `{symbol}`\nDirection:"
@@ -241,56 +202,46 @@ def evaluate_and_trade(df, symbol, current_time):
 
 
 def run_scan_cycle():
-    print(
-        "🤖 Executing Full Multi-Asset Scan Cycle (Crypto via CCXT +"
-        " Forex/Commodities via Alpha Vantage)..."
-    )
-    current_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    print("🤖 Executing Full Multi-Asset Scan Cycle via Yahoo Finance...")
+    current_time = datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-    # 1. Scan Crypto via CCXT
-    exchange = ccxt.binance({"enableRateLimit": True})
-    for symbol in CRYPTO_SYMBOLS:
+    for label, ticker in ALL_ASSETS.items():
         try:
-            ohlcv = exchange.fetch_ohlcv(symbol, timeframe="1h", limit=500)
-            df = pd.DataFrame(
-                ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"]
-            )
-            df = add_advanced_features(df)
-            evaluate_and_trade(df, symbol, current_time)
-        except Exception as e:
-            print(f"Error processing crypto {symbol}: {e}")
-
-    # 2. Scan Forex & Commodities via Alpha Vantage FX_DAILY
-    for label, (from_sym, to_sym) in FOREX_COMMODITY_SYMBOLS.items():
-        try:
-            url = f"https://www.alphavantage.co/query?function=FX_DAILY&from_symbol={from_sym}&to_symbol={to_sym}&apikey={ALPHA_VANTAGE_API_KEY}"
-            response = requests.get(url)
-            data = response.json()
-            time_series = data.get("Time Series FX (Daily)", {})
-
-            if not time_series:
-                print(f"No data returned for {label} from Alpha Vantage.")
+            df = yf.download(ticker, period="60d", interval="1h", progress=False)
+            if df.empty:
+                print(f"⚠️ No data returned for {label} ({ticker}).")
                 continue
 
-            df = pd.DataFrame.from_dict(time_series, orient="index")
+            # Flatten MultiIndex columns if present in newer yfinance versions
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+
             df = df.rename(
                 columns={
-                    "1. open": "open",
-                    "2. high": "high",
-                    "3. low": "low",
-                    "4. close": "close",
+                    "Open": "open",
+                    "High": "high",
+                    "Low": "low",
+                    "Close": "close",
+                    "Volume": "volume",
                 }
             )
-            df["volume"] = 0.0  # FX endpoints default volume to zero
-            df = (
-                df[["open", "high", "low", "close", "volume"]]
-                .astype(float)
-                .sort_index()
-            )
+
+            # Ensure necessary columns exist and are numeric
+            required_cols = ["open", "high", "low", "close", "volume"]
+            for col in required_cols:
+                if col not in df.columns:
+                    df[col] = 0.0
+
+            df = df[required_cols].astype(float).dropna()
+            if len(df) < 50:
+                print(f"⚠️ Insufficient data points for {label}")
+                continue
+
             df = add_advanced_features(df)
             evaluate_and_trade(df, label, current_time)
+            print(f"Successfully processed {label}")
         except Exception as e:
-            print(f"Error processing forex/commodity {label}: {e}")
+            print(f"❌ Error processing {label}: {e}")
 
 
 if __name__ == "__main__":

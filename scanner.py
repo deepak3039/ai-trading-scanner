@@ -15,13 +15,40 @@ ALPHA_VANTAGE_API_KEY = os.environ.get("ALPHA_VANTAGE_API_KEY")
 BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY")
 BINANCE_SECRET_KEY = os.environ.get("BINANCE_SECRET_KEY")
 
-CRYPTO_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+# --- EXPANDED WATCHLISTS ---
+CRYPTO_SYMBOLS = [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT",
+    "BNB/USDT",
+    "XRP/USDT",
+    "ADA/USDT",
+    "DOGE/USDT",
+    "AVAX/USDT",
+]
+
+# Forex & Commodities mapped to Alpha Vantage currency parameters
+FOREX_COMMODITY_SYMBOLS = {
+    "EUR/USD": ("EUR", "USD"),
+    "GBP/USD": ("GBP", "USD"),
+    "EUR/JPY": ("EUR", "JPY"),
+    "GBP/JPY": ("GBP", "JPY"),
+    "USD/JPY": ("USD", "JPY"),
+    "AUD/USD": ("AUD", "USD"),
+    "XAU/USD (Gold)": ("XAU", "USD"),
+    "XAG/USD (Silver)": ("XAG", "USD"),
+}
+
 LOG_FILE = "trade_log.csv"
 
 
 def send_telegram_alert(message):
   url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-  payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
+  payload = {
+      "chat_id": TELEGRAM_CHAT_ID,
+      "text": message,
+      "parse_mode": "Markdown",
+  }
   try:
     requests.post(url, json=payload, timeout=10)
   except Exception as e:
@@ -32,6 +59,8 @@ def execute_paper_order(symbol, direction, price):
   if not BINANCE_API_KEY or not BINANCE_SECRET_KEY:
     print("⚠️ Binance API keys missing. Skipping live paper execution.")
     return "SKIPPED"
+  if "/" not in symbol or "USDT" not in symbol:
+    return "LOG_ONLY"
 
   try:
     exchange = ccxt.binance({
@@ -81,8 +110,6 @@ def log_trade_to_csv(
 
 
 def add_advanced_features(df):
-  """Engineers traditional indicators and smart money price action features."""
-  # 1. Momentum & Trend Indicators (pandas-ta)
   df["rsi"] = ta.rsi(df["close"], length=14)
   df["ema_20"] = ta.ema(df["close"], length=20)
   df["ema_50"] = ta.ema(df["close"], length=50)
@@ -110,35 +137,113 @@ def add_advanced_features(df):
 
   df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
 
-  # 2. Market Structure & Swing Highs/Lows (5-candle rolling window)
-  df["swing_high"] = df["high"][(df["high"] == df["high"].rolling(5, center=True).max())].fillna(0)
-  df["swing_low"] = df["low"][(df["low"] == df["low"].rolling(5, center=True).min())].fillna(0)
+  df["swing_high"] = df["high"][
+      (df["high"] == df["high"].rolling(5, center=True).max())
+  ].fillna(0)
+  df["swing_low"] = df["low"][
+      (df["low"] == df["low"].rolling(5, center=True).min())
+  ].fillna(0)
 
-  # 3. Support & Resistance Levels (Rolling 50-period min/max)
   df["support"] = df["low"].rolling(window=50).min()
   df["resistance"] = df["high"].rolling(window=50).max()
 
-  # 4. Fair Value Gap (FVG) Detection
-  # Bullish FVG: Low of candle[i] > High of candle[i-2]
   df["bullish_fvg"] = (df["low"] > df["high"].shift(2)).astype(int)
-  # Bearish FVG: High of candle[i] < Low of candle[i-2]
   df["bearish_fvg"] = (df["high"] < df["low"].shift(2)).astype(int)
 
-  # 5. Liquidity Sweep Approximation (Price breaks recent swing high/low then reverses)
   df["prev_high"] = df["high"].shift(1).rolling(10).max()
   df["prev_low"] = df["low"].shift(1).rolling(10).min()
-  df["liquidity_sweep_bullish"] = ((df["low"] < df["prev_low"]) & (df["close"] > df["open"])).astype(int)
-  df["liquidity_sweep_bearish"] = ((df["high"] > df["prev_high"]) & (df["close"] < df["open"])).astype(int)
+  df["liquidity_sweep_bullish"] = (
+      (df["low"] < df["prev_low"]) & (df["close"] > df["open"])
+  ).astype(int)
+  df["liquidity_sweep_bearish"] = (
+      (df["high"] > df["prev_high"]) & (df["close"] < df["open"])
+  ).astype(int)
 
-  # 6. Target Variable for Machine Learning (Next candle green = 1, red = 0)
   df["target"] = (df["close"].shift(-1) > df["close"]).astype(int)
   return df.dropna()
 
 
+def evaluate_and_trade(df, symbol, current_time):
+  feature_columns = [
+      "rsi",
+      "ema_20",
+      "ema_50",
+      "macd",
+      "macd_hist",
+      "bb_lower",
+      "bb_upper",
+      "atr",
+      "bullish_fvg",
+      "bearish_fvg",
+      "liquidity_sweep_bullish",
+      "liquidity_sweep_bearish",
+      "volume",
+  ]
+
+  X = df[feature_columns]
+  y = df["target"]
+
+  if len(X) < 50:
+    return
+
+  X_train, X_test, y_train, y_test = train_test_split(
+      X, y, test_size=0.2, shuffle=False
+  )
+  model = RandomForestClassifier(n_estimators=150, random_state=42)
+  model.fit(X_train, y_train)
+
+  latest_features = X.iloc[[-1]]
+  prediction = model.predict(latest_features)[0]
+  prediction_proba = model.predict_proba(latest_features)[0]
+  current_price = df["close"].iloc[-1]
+  current_atr = df["atr"].iloc[-1]
+
+  confidence = (
+      prediction_proba[1] * 100
+      if prediction == 1
+      else prediction_proba[0] * 100
+  )
+
+  if confidence >= 60.0:
+    direction = "BULLISH" if prediction == 1 else "BEARISH"
+    if prediction == 1:
+      stop_loss = current_price - (2 * current_atr)
+      take_profit = current_price + (3 * current_atr)
+    else:
+      stop_loss = current_price + (2 * current_atr)
+      take_profit = current_price - (3 * current_atr)
+
+    order_status = execute_paper_order(symbol, direction, current_price)
+
+    msg = (
+        f"🧠 *AI MULTI-ASSET SETUP* 🧠\n\nAsset: `{symbol}`\nDirection:"
+        f" *{direction}*\nPrice: `{current_price:.5f}`\nAI Confidence:"
+        f" *{confidence:.1f}%*\nStatus: *{order_status}*\n\n🛡️ *Risk"
+        f" Management:*\nStop-Loss: `{stop_loss:.5f}`\nTake-Profit:"
+        f" `{take_profit:.5f}`"
+    )
+    send_telegram_alert(msg)
+
+    log_trade_to_csv(
+        current_time,
+        symbol,
+        direction,
+        current_price,
+        round(confidence, 1),
+        round(stop_loss, 5),
+        round(take_profit, 5),
+        order_status,
+    )
+
+
 def run_scan_cycle():
-  print("🤖 Executing AI Scan Cycle with Advanced SMC & Technical Indicators...")
+  print(
+      "🤖 Executing Full Multi-Asset Scan Cycle (Crypto via CCXT +"
+      " Forex/Commodities via Alpha Vantage)..."
+  )
   current_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 
+  # 1. Scan Crypto via CCXT
   exchange = ccxt.binance({"enableRateLimit": True})
   for symbol in CRYPTO_SYMBOLS:
     try:
@@ -147,76 +252,41 @@ def run_scan_cycle():
           ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"]
       )
       df = add_advanced_features(df)
-
-      feature_columns = [
-          "rsi",
-          "ema_20",
-          "ema_50",
-          "macd",
-          "macd_hist",
-          "bb_lower",
-          "bb_upper",
-          "atr",
-          "bullish_fvg",
-          "bearish_fvg",
-          "liquidity_sweep_bullish",
-          "liquidity_sweep_bearish",
-          "volume",
-      ]
-
-      X = df[feature_columns]
-      y = df["target"]
-
-      X_train, X_test, y_train, y_test = train_test_split(
-          X, y, test_size=0.2, shuffle=False
-      )
-      model = RandomForestClassifier(n_estimators=150, random_state=42)
-      model.fit(X_train, y_train)
-
-      latest_features = X.iloc[[-1]]
-      prediction = model.predict(latest_features)[0]
-      prediction_proba = model.predict_proba(latest_features)[0]
-      current_price = df["close"].iloc[-1]
-      current_atr = df["atr"].iloc[-1]
-
-      confidence = (
-          prediction_proba[1] * 100
-          if prediction == 1
-          else prediction_proba[0] * 100
-      )
-
-      if confidence >= 60.0:
-        direction = "BULLISH" if prediction == 1 else "BEARISH"
-        if prediction == 1:
-          stop_loss = current_price - (2 * current_atr)
-          take_profit = current_price + (3 * current_atr)
-        else:
-          stop_loss = current_price + (2 * current_atr)
-          take_profit = current_price - (3 * current_atr)
-
-        order_status = execute_paper_order(symbol, direction, current_price)
-
-        msg = (
-            f"🧠 *AI SMC & TECHNICAL SETUP* 🧠\n\nAsset: `{symbol}`\nDirection:"
-            f" *{direction}*\nPrice: `{current_price:.2f}`\nAI Confidence:"
-            f" *{confidence:.1f}%*\nOrder Status: *{order_status}*\n\n🛡️ *Risk"
-            f" Management:*\nStop-Loss: `{stop_loss:.2f}`\nTake-Profit:"
-            f" `{take_profit:.2f}`"
-        )
-        send_telegram_alert(msg)
-
-        log_trade_to_csv(
-            current_time,
-            symbol,
-            direction,
-            current_price,
-            round(confidence, 1),
-            round(stop_loss, 2),
-            round(take_profit, 2),
-            order_status,
-        )
+      evaluate_and_trade(df, symbol, current_time)
     except Exception as e:
-      print(f"Error processing {symbol}: {e}")
+      print(f"Error processing crypto {symbol}: {e}")
+
+  # 2. Scan Forex & Commodities via Alpha Vantage FX_DAILY
+  for label, (from_sym, to_sym) in FOREX_COMMODITY_SYMBOLS.items():
+    try:
+      url = f"https://www.alphavantage.co/query?function=FX_DAILY&from_symbol={from_sym}&to_symbol={to_sym}&apikey={ALPHA_VANTAGE_API_KEY}"
+      response = requests.get(url)
+      data = response.json()
+      time_series = data.get("Time Series FX (Daily)", {})
+
+      if not time_series:
+        print(f"No data returned for {label} from Alpha Vantage.")
+        continue
+
+      df = pd.DataFrame.from_dict(time_series, orient="index")
+      df = df.rename(
+          columns={
+              "1. open": "open",
+              "2. high": "high",
+              "3. low": "low",
+              "4. close": "close",
+          }
+      )
+      df["volume"] = 0.0  # FX endpoints default volume to zero
+      df = (
+          df[["open", "high", "low", "close", "volume"]]
+          .astype(float)
+          .sort_index()
+      )
+      df = add_advanced_features(df)
+      evaluate_and_trade(df, label, current_time)
+    except Exception as e:
+      print(f"Error processing forex/commodity {label}: {e}")
 
 
 if __name__ == "__main__":

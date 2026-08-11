@@ -1,9 +1,3 @@
-setuptools
-wheel
 streamlit
 pandas
-scikit-learn
-pandas-ta
 requests
-yfinance
-ccxt

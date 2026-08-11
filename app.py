@@ -10,8 +10,8 @@ LOG_FILE = "trade_log.csv"
 
 st.title("📈 AI Multi-Asset Trading Scanner Dashboard")
 st.markdown(
-    "Control live indicators, adjust confidence filters, and analyze trade"
-    " logs in real time."
+    "Control live indicators with on/off toggles, adjust confidence filters,"
+    " and analyze trade logs in real time."
 )
 
 
@@ -19,7 +19,6 @@ st.markdown(
 def load_data():
     if os.path.exists(LOG_FILE):
         df = pd.read_csv(LOG_FILE)
-        # Normalize/Clean Confidence columns to prevent NaN filtering bugs
         if "Confidence_%" in df.columns:
             df["Confidence_%"] = pd.to_numeric(
                 df["Confidence_%"], errors="coerce"
@@ -85,17 +84,45 @@ else:
     else:
         selected_signal = "ALL"
 
-    # 5. Technical Indicator Settings (Custom controls for scanner parameters)
-    st.sidebar.subheader("📊 Indicator Parameters")
-    rsi_period = st.sidebar.slider(
-        "RSI Period", min_value=5, max_value=30, value=14
+    # 5. Indicator On/Off Toggles and Parameters
+    st.sidebar.subheader("📊 Indicator Controls & Toggles")
+
+    # RSI
+    use_rsi = st.sidebar.checkbox("Enable RSI Indicator", value=True)
+    rsi_period = 14
+    if use_rsi:
+        rsi_period = st.sidebar.slider(
+            "RSI Period", min_value=5, max_value=30, value=14
+        )
+
+    # MACD
+    use_macd = st.sidebar.checkbox("Enable MACD Indicator", value=True)
+    macd_fast, macd_slow = 12, 26
+    if use_macd:
+        macd_fast = st.sidebar.slider(
+            "MACD Fast Period", min_value=5, max_value=20, value=12
+        )
+        macd_slow = st.sidebar.slider(
+            "MACD Slow Period", min_value=21, max_value=40, value=26
+        )
+
+    # Bollinger Bands
+    use_bb = st.sidebar.checkbox("Enable Bollinger Bands", value=True)
+    bb_period = 20
+    if use_bb:
+        bb_period = st.sidebar.slider(
+            "Bollinger Bands Period", min_value=10, max_value=50, value=20
+        )
+
+    # EMA
+    use_ema = st.sidebar.checkbox(
+        "Enable EMA (Exponential Moving Average)", value=True
     )
-    macd_fast = st.sidebar.slider(
-        "MACD Fast Period", min_value=5, max_value=20, value=12
-    )
-    macd_slow = st.sidebar.slider(
-        "MACD Slow Period", min_value=21, max_value=40, value=26
-    )
+    ema_period = 50
+    if use_ema:
+        ema_period = st.sidebar.slider(
+            "EMA Period", min_value=10, max_value=200, value=50
+        )
 
     # --- APPLY FILTERS ---
     filtered_df = df.copy()
@@ -124,6 +151,27 @@ else:
     col4.metric("Active Assets Tracked", len(all_assets))
 
     st.divider()
+
+    # --- ACTIVE INDICATOR STATUS DISPLAY ---
+    st.subheader("⚙️ Active Technical Indicators Configuration")
+    active_indicators = []
+    if use_rsi:
+        active_indicators.append(f"RSI (Period: {rsi_period})")
+    if use_macd:
+        active_indicators.append(
+            f"MACD (Fast: {macd_fast}, Slow: {macd_slow})"
+        )
+    if use_bb:
+        active_indicators.append(f"Bollinger Bands (Period: {bb_period})")
+    if use_ema:
+        active_indicators.append(f"EMA (Period: {ema_period})")
+
+    if active_indicators:
+        st.info(
+            "**Currently Enabled Indicators:** " + " | ".join(active_indicators)
+        )
+    else:
+        st.warning("⚠️ All technical indicators are currently disabled.")
 
     # --- MAIN INTERACTIVE TABLE ---
     st.subheader("📊 Interactive Trade Log Explorer")

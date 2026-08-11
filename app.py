@@ -20,11 +20,15 @@ def load_data():
   if os.path.exists(LOG_FILE):
     df = pd.read_csv(LOG_FILE)
     
-    # Prioritize the lowercase 'confidence' column where the actual data lives
-    if "confidence" in df.columns:
-      df["Confidence_%"] = pd.to_numeric(df["confidence"], errors="coerce").fillna(0)
-    elif "Confidence_%" in df.columns:
-      df["Confidence_%"] = pd.to_numeric(df["Confidence_%"], errors="coerce").fillna(0)
+    # Normalize confidence column (handles mixed decimal ratios like 0.85 and percentages like 72)
+    conf_col = "confidence" if "confidence" in df.columns else ("Confidence_%" if "Confidence_%" in df.columns else None)
+    
+    if conf_col:
+      s = pd.to_numeric(df[conf_col], errors="coerce").fillna(0)
+      if s.max() <= 1.0 and s.min() >= 0.0:
+        df["Confidence_%"] = s * 100
+      else:
+        df["Confidence_%"] = s
     else:
       df["Confidence_%"] = 0.0
       

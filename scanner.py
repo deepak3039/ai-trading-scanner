@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
@@ -13,7 +13,6 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 # --- UNIFIED WATCHLISTS VIA YAHOO FINANCE ---
-# Format: Display Label -> Yahoo Finance Ticker
 ALL_ASSETS = {
     # Crypto
     "BTC/USDT": "BTC-USD",
@@ -203,7 +202,7 @@ def evaluate_and_trade(df, symbol, current_time):
 
 def run_scan_cycle():
     print("🤖 Executing Full Multi-Asset Scan Cycle via Yahoo Finance...")
-    current_time = datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    current_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     for label, ticker in ALL_ASSETS.items():
         try:
@@ -212,7 +211,6 @@ def run_scan_cycle():
                 print(f"⚠️ No data returned for {label} ({ticker}).")
                 continue
 
-            # Flatten MultiIndex columns if present in newer yfinance versions
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
 
@@ -226,7 +224,6 @@ def run_scan_cycle():
                 }
             )
 
-            # Ensure necessary columns exist and are numeric
             required_cols = ["open", "high", "low", "close", "volume"]
             for col in required_cols:
                 if col not in df.columns:

@@ -1,8 +1,7 @@
-ccxt
-numpy
+streamlit
 pandas
-pandas-ta
+numpy
+plotly
 requests
 scikit-learn
-streamlit
-plotly
+ccxt

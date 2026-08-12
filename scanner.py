@@ -12,6 +12,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
 
 # --- WATCHLIST ---
 ALL_ASSETS = {
+    "XAU/USD": "GC=F",  # <-- Added Gold Futures
     "BTC/USDT": "BTC-USD",
     "ETH/USDT": "ETH-USD",
     "SOL/USDT": "SOL-USD",

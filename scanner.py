@@ -46,10 +46,13 @@ def send_telegram_alert(message):
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": message,
-        "parse_mode": "Markdown",
     }
     try:
-        requests.post(url, json=payload, timeout=10)
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code != 200:
+            print(f"❌ Telegram API Error: {response.text}")
+        else:
+            print("✅ Telegram alert sent successfully.")
     except Exception as e:
         print(f"❌ Error sending Telegram alert: {e}")
 
@@ -180,11 +183,15 @@ def evaluate_and_trade(df, symbol, current_time):
         order_status = "PAPER_EXECUTED"
 
         msg = (
-            f"🧠 *AI MULTI-ASSET SETUP* 🧠\n\nAsset: `{symbol}`\nDirection:"
-            f" *{direction}*\nPrice: `{current_price:.5f}`\nAI Confidence:"
-            f" *{confidence:.1f}%*\nStatus: *{order_status}*\n\n🛡️ *Risk"
-            f" Management:*\nStop-Loss: `{stop_loss:.5f}`\nTake-Profit:"
-            f" `{take_profit:.5f}`"
+            f"🧠 AI MULTI-ASSET SETUP 🧠\n\n"
+            f"Asset: {symbol}\n"
+            f"Direction: {direction}\n"
+            f"Price: {current_price:.5f}\n"
+            f"AI Confidence: {confidence:.1f}%\n"
+            f"Status: {order_status}\n\n"
+            f"🛡️ Risk Management:\n"
+            f"Stop-Loss: {stop_loss:.5f}\n"
+            f"Take-Profit: {take_profit:.5f}"
         )
         send_telegram_alert(msg)
 

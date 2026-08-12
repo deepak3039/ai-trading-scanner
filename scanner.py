@@ -12,7 +12,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
 
 # --- WATCHLIST ---
 ALL_ASSETS = {
-    "XAU/USD": "GC=F",  # <-- Added Gold Futures
+    "XAU/USD": "GC=F",
     "BTC/USDT": "BTC-USD",
     "ETH/USDT": "ETH-USD",
     "SOL/USDT": "SOL-USD",
@@ -48,7 +48,7 @@ def check_active_trades():
 
     try:
         df_log = pd.read_csv(LOG_FILE)
-        if df_log.empty:
+        if df_log.empty or "asset" not in df_log.columns or "status" not in df_log.columns:
             return
 
         updated_rows = []
@@ -151,15 +151,18 @@ def log_new_trade(label, direction, entry, tp, sl, timestamp):
         "status": "OPEN",
     }
     if os.path.exists(LOG_FILE):
-        df_log = pd.read_csv(LOG_FILE)
-        # Avoid duplicate open trade for the same asset
-        if (
-            not df_log[
-                (df_log["asset"] == label) & (df_log["status"] == "OPEN")
-            ].empty
-        ):
-            return
-        df_log = pd.concat([df_log, pd.DataFrame([new_row])], ignore_index=True)
+        try:
+            df_log = pd.read_csv(LOG_FILE)
+            if df_log.empty or "asset" not in df_log.columns:
+                df_log = pd.DataFrame([new_row])
+            else:
+                if not df_log[
+                    (df_log["asset"] == label) & (df_log["status"] == "OPEN")
+                ].empty:
+                    return
+                df_log = pd.concat([df_log, pd.DataFrame([new_row])], ignore_index=True)
+        except Exception:
+            df_log = pd.DataFrame([new_row])
     else:
         df_log = pd.DataFrame([new_row])
     df_log.to_csv(LOG_FILE, index=False)
@@ -202,7 +205,6 @@ def compute_indicators(df):
 def run_live_scanner():
     print("🚀 Running Live Optimized Market Scanner & TP/SL Tracker...")
 
-    # Step 1: Check existing open trades for TP/SL hits
     check_active_trades()
 
     feature_columns = [

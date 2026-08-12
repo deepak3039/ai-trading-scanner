@@ -24,6 +24,8 @@ ALL_ASSETS = {
     "USD/JPY": "USDJPY=X",
 }
 
+LOG_FILE = "trade_log.csv"
+
 
 def send_telegram_alert(message):
     if TELEGRAM_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
@@ -37,6 +39,129 @@ def send_telegram_alert(message):
             print(f"Failed to send Telegram alert: {response.text}")
     except Exception as e:
         print(f"Telegram error: {e}")
+
+
+def check_active_trades():
+    if not os.path.exists(LOG_FILE):
+        return
+
+    try:
+        df_log = pd.read_csv(LOG_FILE)
+        if df_log.empty:
+            return
+
+        updated_rows = []
+        for idx, row in df_log.iterrows():
+            if row["status"] != "OPEN":
+                updated_rows.append(row)
+                continue
+
+            label = row["asset"]
+            ticker = ALL_ASSETS.get(label)
+            if not ticker:
+                updated_rows.append(row)
+                continue
+
+            df_recent = yf.download(
+                ticker, period="5d", interval="1d", progress=False
+            )
+            if df_recent.empty:
+                updated_rows.append(row)
+                continue
+            if isinstance(df_recent.columns, pd.MultiIndex):
+                df_recent.columns = df_recent.columns.get_level_values(0)
+
+            latest_high = float(df_recent["High"].iloc[-1])
+            latest_low = float(df_recent["Low"].iloc[-1])
+            current_price = float(df_recent["Close"].iloc[-1])
+
+            direction = row["direction"]
+            tp = float(row["tp"])
+            sl = float(row["sl"])
+
+            hit_status = "OPEN"
+            if direction == "LONG":
+                if latest_high >= tp:
+                    hit_status = "TP_HIT"
+                    msg = (
+                        f"🎯 **TAKE PROFIT HIT** 🎯\n\n"
+                        f"**Asset:** `{label}`\n"
+                        f"**Direction:** `LONG`\n"
+                        f"**Entry Price:** `{row['entry_price']}`\n"
+                        f"**Target Hit (TP):** `{tp}`\n"
+                        f"**Current Price:** `{current_price:.5g}`\n"
+                        f"Status: Target Achieved Successfully! 🚀"
+                    )
+                    send_telegram_alert(msg)
+                elif latest_low <= sl:
+                    hit_status = "SL_HIT"
+                    msg = (
+                        f"🛑 **STOP LOSS HIT** 🛑\n\n"
+                        f"**Asset:** `{label}`\n"
+                        f"**Direction:** `LONG`\n"
+                        f"**Entry Price:** `{row['entry_price']}`\n"
+                        f"**Stop Loss Hit (SL):** `{sl}`\n"
+                        f"**Current Price:** `{current_price:.5g}`\n"
+                        f"Status: Risk management stop triggered."
+                    )
+                    send_telegram_alert(msg)
+            elif direction == "SHORT":
+                if latest_low <= tp:
+                    hit_status = "TP_HIT"
+                    msg = (
+                        f"🎯 **TAKE PROFIT HIT** 🎯\n\n"
+                        f"**Asset:** `{label}`\n"
+                        f"**Direction:** `SHORT`\n"
+                        f"**Entry Price:** `{row['entry_price']}`\n"
+                        f"**Target Hit (TP):** `{tp}`\n"
+                        f"**Current Price:** `{current_price:.5g}`\n"
+                        f"Status: Target Achieved Successfully! 🚀"
+                    )
+                    send_telegram_alert(msg)
+                elif latest_high >= sl:
+                    hit_status = "SL_HIT"
+                    msg = (
+                        f"🛑 **STOP LOSS HIT** 🛑\n\n"
+                        f"**Asset:** `{label}`\n"
+                        f"**Direction:** `SHORT`\n"
+                        f"**Entry Price:** `{row['entry_price']}`\n"
+                        f"**Stop Loss Hit (SL):** `{sl}`\n"
+                        f"**Current Price:** `{current_price:.5g}`\n"
+                        f"Status: Risk management stop triggered."
+                    )
+                    send_telegram_alert(msg)
+
+            row["status"] = hit_status
+            updated_rows.append(row)
+
+        pd.DataFrame(updated_rows).to_csv(LOG_FILE, index=False)
+    except Exception as e:
+        print(f"Error checking active trades: {e}")
+
+
+def log_new_trade(label, direction, entry, tp, sl, timestamp):
+    new_row = {
+        "asset": label,
+        "direction": direction,
+        "entry_price": entry,
+        "tp": tp,
+        "sl": sl,
+        "timestamp": timestamp,
+        "status": "OPEN",
+    }
+    if os.path.exists(LOG_FILE):
+        df_log = pd.read_csv(LOG_FILE)
+        # Avoid duplicate open trade for the same asset
+        if (
+            not df_log[
+                (df_log["asset"] == label) & (df_log["status"] == "OPEN")
+            ].empty
+        ):
+            return
+        df_log = pd.concat([df_log, pd.DataFrame([new_row])], ignore_index=True)
+    else:
+        df_log = pd.DataFrame([new_row])
+    df_log.to_csv(LOG_FILE, index=False)
 
 
 def compute_indicators(df):
@@ -74,6 +199,11 @@ def compute_indicators(df):
 
 
 def run_live_scanner():
+    print("🚀 Running Live Optimized Market Scanner & TP/SL Tracker...")
+
+    # Step 1: Check existing open trades for TP/SL hits
+    check_active_trades()
+
     feature_columns = [
         "rsi",
         "ema_20",
@@ -86,8 +216,6 @@ def run_live_scanner():
         "trend_filter",
         "volume",
     ]
-
-    print("🚀 Running Live Optimized Market Scanner...")
 
     for label, ticker in ALL_ASSETS.items():
         try:
@@ -144,6 +272,9 @@ def run_live_scanner():
                 if pred == 1 and trend == 1:
                     sl = current_price - (1.0 * atr)
                     tp = current_price + (3.0 * atr)
+                    log_new_trade(
+                        label, "LONG", current_price, tp, sl, entry_time
+                    )
                     msg = (
                         f"🚨 **OPTIMIZED BUY SIGNAL** 🚨\n\n"
                         f"**Asset:** `{label}`\n"
@@ -160,6 +291,9 @@ def run_live_scanner():
                 elif pred == 0 and trend == 0:
                     sl = current_price + (1.0 * atr)
                     tp = current_price - (3.0 * atr)
+                    log_new_trade(
+                        label, "SHORT", current_price, tp, sl, entry_time
+                    )
                     msg = (
                         f"🚨 **OPTIMIZED SELL SIGNAL** 🚨\n\n"
                         f"**Asset:** `{label}`\n"

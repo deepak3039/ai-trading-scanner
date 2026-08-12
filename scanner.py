@@ -1,136 +1,79 @@
 import os
-from datetime import datetime, timezone
+import requests
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
-import requests
 import yfinance as yf
+from datetime import datetime, timezone
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
 
-# --- LOAD SECRETS FROM ENVIRONMENT ---
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+# --- TELEGRAM CONFIGURATION ---
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
 
-# --- UNIFIED WATCHLISTS VIA YAHOO FINANCE ---
+# --- WATCHLIST ---
 ALL_ASSETS = {
-    # Crypto
     "BTC/USDT": "BTC-USD",
     "ETH/USDT": "ETH-USD",
     "SOL/USDT": "SOL-USD",
     "BNB/USDT": "BNB-USD",
     "XRP/USDT": "XRP-USD",
     "ADA/USDT": "ADA-USD",
-    "DOGE/USDT": "DOGE-USD",
     "AVAX/USDT": "AVAX-USD",
-    # Forex & Commodities
     "EUR/USD": "EURUSD=X",
     "GBP/USD": "GBPUSD=X",
-    "EUR/JPY": "EURJPY=X",
-    "GBP/JPY": "GBPJPY=X",
     "USD/JPY": "USDJPY=X",
-    "AUD/USD": "AUDUSD=X",
-    "XAU/USD (Gold)": "GC=F",
-    "XAG/USD (Silver)": "SI=F",
 }
-
-LOG_FILE = "trade_log.csv"
 
 
 def send_telegram_alert(message):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("⚠️ Telegram credentials missing. Skipping alert.")
+    if TELEGRAM_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
+        print(f"[Telegram Mock Alert]: {message}")
         return
-
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-    }
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
         response = requests.post(url, json=payload, timeout=10)
         if response.status_code != 200:
-            print(f"❌ Telegram API Error: {response.text}")
-        else:
-            print("✅ Telegram alert sent successfully.")
+            print(f"Failed to send Telegram alert: {response.text}")
     except Exception as e:
-        print(f"❌ Error sending Telegram alert: {e}")
+        print(f"Telegram error: {e}")
 
 
-def log_trade_to_csv(
-    timestamp,
-    asset,
-    direction,
-    price,
-    confidence,
-    stop_loss,
-    take_profit,
-    status,
-):
-    file_exists = os.path.exists(LOG_FILE)
-    log_data = {
-        "Timestamp": [timestamp],
-        "Asset": [asset],
-        "Direction": [direction],
-        "Entry_Price": [price],
-        "Confidence_%": [confidence],
-        "Stop_Loss": [stop_loss],
-        "Take_Profit": [take_profit],
-        "Status": [status],
-    }
-    df_log = pd.DataFrame(log_data)
-    df_log.to_csv(LOG_FILE, mode="a", index=False, header=not file_exists)
-    print(f"📝 Logged trade for {asset} to {LOG_FILE}")
+def compute_indicators(df):
+    df["ema_20"] = df["close"].ewm(span=20, adjust=False).mean()
+    df["ema_50"] = df["close"].ewm(span=50, adjust=False).mean()
+    df["ema_200"] = df["close"].ewm(span=200, adjust=False).mean()
 
+    df["trend_filter"] = (df["close"] > df["ema_200"]).astype(int)
 
-def add_advanced_features(df):
-    df["rsi"] = ta.rsi(df["close"], length=14)
-    df["ema_20"] = ta.ema(df["close"], length=20)
-    df["ema_50"] = ta.ema(df["close"], length=50)
-    df["ema_200"] = ta.ema(df["close"], length=200)
+    delta = df["close"].diff()
+    gain = (delta.where(delta > 0, 0)).ewm(alpha=1 / 14, adjust=False).mean()
+    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1 / 14, adjust=False).mean()
+    rs = gain / loss
+    df["rsi"] = 100 - (100 / (1 + rs))
 
-    macd_df = ta.macd(df["close"], fast=12, slow=26, signal=9)
-    if macd_df is not None and not macd_df.empty:
-        df["macd"] = macd_df.iloc[:, 0]
-        df["macd_hist"] = macd_df.iloc[:, 1]
-        df["macd_signal"] = macd_df.iloc[:, 2]
-    else:
-        df["macd"] = 0
-        df["macd_hist"] = 0
-        df["macd_signal"] = 0
+    ema12 = df["close"].ewm(span=12, adjust=False).mean()
+    ema26 = df["close"].ewm(span=26, adjust=False).mean()
+    df["macd"] = ema12 - ema26
+    df["macd_signal"] = df["macd"].ewm(span=9, adjust=False).mean()
+    df["macd_hist"] = df["macd"] - df["macd_signal"]
 
-    bb_df = ta.bbands(df["close"], length=20, std=2)
-    if bb_df is not None and not bb_df.empty:
-        df["bb_lower"] = bb_df.iloc[:, 0]
-        df["bb_middle"] = bb_df.iloc[:, 1]
-        df["bb_upper"] = bb_df.iloc[:, 2]
-    else:
-        df["bb_lower"] = df["close"]
-        df["bb_middle"] = df["close"]
-        df["bb_upper"] = df["close"]
+    df["bb_middle"] = df["close"].rolling(window=20).mean()
+    std = df["close"].rolling(window=20).std()
+    df["bb_upper"] = df["bb_middle"] + (2 * std)
+    df["bb_lower"] = df["bb_middle"] - (2 * std)
 
-    df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
+    high_low = df["high"] - df["low"]
+    high_close = np.abs(df["high"] - df["close"].shift())
+    low_close = np.abs(df["low"] - df["close"].shift())
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    df["atr"] = tr.ewm(span=14, adjust=False).mean()
 
-    df["support"] = df["low"].rolling(window=50).min()
-    df["resistance"] = df["high"].rolling(window=50).max()
-
-    df["bullish_fvg"] = (df["low"] > df["high"].shift(2)).astype(int)
-    df["bearish_fvg"] = (df["high"] < df["low"].shift(2)).astype(int)
-
-    df["prev_high"] = df["high"].shift(1).rolling(10).max()
-    df["prev_low"] = df["low"].shift(1).rolling(10).min()
-    df["liquidity_sweep_bullish"] = (
-        (df["low"] < df["prev_low"]) & (df["close"] > df["open"])
-    ).astype(int)
-    df["liquidity_sweep_bearish"] = (
-        (df["high"] > df["prev_high"]) & (df["close"] < df["open"])
-    ).astype(int)
-
-    df["target"] = (df["close"].shift(-1) > df["close"]).astype(int)
+    df["target"] = (df["close"].shift(-3) > df["close"]).astype(int)
     return df.dropna()
 
 
-def evaluate_and_trade(df, symbol, current_time):
+def run_live_scanner():
     feature_columns = [
         "rsi",
         "ema_20",
@@ -140,84 +83,17 @@ def evaluate_and_trade(df, symbol, current_time):
         "bb_lower",
         "bb_upper",
         "atr",
-        "bullish_fvg",
-        "bearish_fvg",
-        "liquidity_sweep_bullish",
-        "liquidity_sweep_bearish",
+        "trend_filter",
         "volume",
     ]
 
-    X = df[feature_columns]
-    y = df["target"]
-
-    if len(X) < 50:
-        return
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, shuffle=False
-    )
-    model = RandomForestClassifier(n_estimators=150, random_state=42)
-    model.fit(X_train, y_train)
-
-    latest_features = X.iloc[[-1]]
-    prediction = model.predict(latest_features)[0]
-    prediction_proba = model.predict_proba(latest_features)[0]
-    current_price = float(df["close"].iloc[-1])
-    current_atr = float(df["atr"].iloc[-1])
-
-    confidence = (
-        prediction_proba[1] * 100
-        if prediction == 1
-        else prediction_proba[0] * 100
-    )
-
-    if confidence >= 60.0:
-        direction = "BULLISH" if prediction == 1 else "BEARISH"
-        if prediction == 1:
-            stop_loss = current_price - (2 * current_atr)
-            take_profit = current_price + (3 * current_atr)
-        else:
-            stop_loss = current_price + (2 * current_atr)
-            take_profit = current_price - (3 * current_atr)
-
-        order_status = "PAPER_EXECUTED"
-
-        msg = (
-            f"🧠 AI MULTI-ASSET SETUP 🧠\n\n"
-            f"Asset: {symbol}\n"
-            f"Direction: {direction}\n"
-            f"Price: {current_price:.5f}\n"
-            f"AI Confidence: {confidence:.1f}%\n"
-            f"Status: {order_status}\n\n"
-            f"🛡️ Risk Management:\n"
-            f"Stop-Loss: {stop_loss:.5f}\n"
-            f"Take-Profit: {take_profit:.5f}"
-        )
-        send_telegram_alert(msg)
-
-        log_trade_to_csv(
-            current_time,
-            symbol,
-            direction,
-            current_price,
-            round(confidence, 1),
-            round(stop_loss, 5),
-            round(take_profit, 5),
-            order_status,
-        )
-
-
-def run_scan_cycle():
-    print("🤖 Executing Full Multi-Asset Scan Cycle via Yahoo Finance...")
-    current_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    print("🚀 Running Live Optimized Market Scanner...")
 
     for label, ticker in ALL_ASSETS.items():
         try:
-            df = yf.download(ticker, period="60d", interval="1h", progress=False)
+            df = yf.download(ticker, period="2y", interval="1d", progress=False)
             if df.empty:
-                print(f"⚠️ No data returned for {label} ({ticker}).")
                 continue
-
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
 
@@ -230,23 +106,76 @@ def run_scan_cycle():
                     "Volume": "volume",
                 }
             )
-
-            required_cols = ["open", "high", "low", "close", "volume"]
-            for col in required_cols:
-                if col not in df.columns:
-                    df[col] = 0.0
-
-            df = df[required_cols].astype(float).dropna()
-            if len(df) < 50:
-                print(f"⚠️ Insufficient data points for {label}")
+            df = (
+                df[["open", "high", "low", "close", "volume"]]
+                .astype(float)
+                .dropna()
+            )
+            if len(df) < 200:
                 continue
 
-            df = add_advanced_features(df)
-            evaluate_and_trade(df, label, current_time)
-            print(f"Successfully processed {label}")
+            df = compute_indicators(df)
+
+            X = df[feature_columns]
+            y = df["target"]
+
+            model = RandomForestClassifier(
+                n_estimators=200,
+                max_depth=5,
+                min_samples_split=30,
+                random_state=42,
+            )
+            model.fit(X, y)
+
+            latest_row = df.iloc[[-1]]
+            X_latest = latest_row[feature_columns]
+            pred = model.predict(X_latest)[0]
+            proba = model.predict_proba(X_latest)[0]
+            conf = max(proba) * 100
+
+            if conf >= 60.0:
+                current_price = float(latest_row["close"].values[0])
+                trend = int(latest_row["trend_filter"].values[0])
+                atr = float(latest_row["atr"].values[0])
+                entry_time = datetime.now(timezone.utc).strftime(
+                    "%Y-%m-%d %H:%M:%S UTC"
+                )
+
+                if pred == 1 and trend == 1:
+                    sl = current_price - (1.0 * atr)
+                    tp = current_price + (3.0 * atr)
+                    msg = (
+                        f"🚨 **OPTIMIZED BUY SIGNAL** 🚨\n\n"
+                        f"**Asset:** `{label}`\n"
+                        f"**Time:** `{entry_time}`\n"
+                        f"**Entry Price:** `{current_price:.5g}`\n"
+                        f"**Take Profit:** `{tp:.5g}`\n"
+                        f"**Stop Loss:** `{sl:.5g}`\n"
+                        f"**Confidence:** `{conf:.1f}%`\n"
+                        f"**Strategy:** Trend-Aligned Long"
+                    )
+                    send_telegram_alert(msg)
+                    print(f"Signal sent for {label} (BUY)")
+
+                elif pred == 0 and trend == 0:
+                    sl = current_price + (1.0 * atr)
+                    tp = current_price - (3.0 * atr)
+                    msg = (
+                        f"🚨 **OPTIMIZED SELL SIGNAL** 🚨\n\n"
+                        f"**Asset:** `{label}`\n"
+                        f"**Time:** `{entry_time}`\n"
+                        f"**Entry Price:** `{current_price:.5g}`\n"
+                        f"**Take Profit:** `{tp:.5g}`\n"
+                        f"**Stop Loss:** `{sl:.5g}`\n"
+                        f"**Confidence:** `{conf:.1f}%`\n"
+                        f"**Strategy:** Trend-Aligned Short"
+                    )
+                    send_telegram_alert(msg)
+                    print(f"Signal sent for {label} (SELL)")
+
         except Exception as e:
-            print(f"❌ Error processing {label}: {e}")
+            print(f"Error scanning {label}: {e}")
 
 
 if __name__ == "__main__":
-    run_scan_cycle()
+    run_live_scanner()

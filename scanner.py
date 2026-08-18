@@ -203,7 +203,7 @@ def compute_indicators(df):
 
 
 def run_live_scanner():
-    print("🚀 Running Live Optimized Market Scanner & TP/SL Tracker...")
+    print("🚀 Running Optimized Market Scanner & R:R-Balanced Tracker...")
 
     check_active_trades()
 
@@ -237,6 +237,13 @@ def run_live_scanner():
                     "Volume": "volume",
                 }
             )
+
+            # Fix for missing/NaN volume on Forex and Gold
+            if "volume" in df.columns:
+                df["volume"] = df["volume"].fillna(0)
+            else:
+                df["volume"] = 0
+
             df = (
                 df[["open", "high", "low", "close", "volume"]]
                 .astype(float)
@@ -274,12 +281,12 @@ def run_live_scanner():
 
                 if pred == 1 and trend == 1:
                     sl = current_price - (1.0 * atr)
-                    tp = current_price + (3.0 * atr)
+                    tp = current_price + (2.0 * atr)  # Optimized to 2:1 R:R
                     log_new_trade(
                         label, "LONG", current_price, tp, sl, entry_time
                     )
                     msg = (
-                        f"🚨 **OPTIMIZED BUY SIGNAL** 🚨\n\n"
+                        f"🚨 **OPTIMIZED BUY SIGNAL (2:1 R:R)** 🚨\n\n"
                         f"**Asset:** `{label}`\n"
                         f"**Time:** `{entry_time}`\n"
                         f"**Entry Price:** `{current_price:.5g}`\n"
@@ -293,12 +300,12 @@ def run_live_scanner():
 
                 elif pred == 0 and trend == 0:
                     sl = current_price + (1.0 * atr)
-                    tp = current_price - (3.0 * atr)
+                    tp = current_price - (2.0 * atr)  # Optimized to 2:1 R:R
                     log_new_trade(
                         label, "SHORT", current_price, tp, sl, entry_time
                     )
                     msg = (
-                        f"🚨 **OPTIMIZED SELL SIGNAL** 🚨\n\n"
+                        f"🚨 **OPTIMIZED SELL SIGNAL (2:1 R:R)** 🚨\n\n"
                         f"**Asset:** `{label}`\n"
                         f"**Time:** `{entry_time}`\n"
                         f"**Entry Price:** `{current_price:.5g}`\n"

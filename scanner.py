@@ -13,7 +13,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
 # --- TIMEZONE CONFIGURATION (IST) ---
 IST = timezone(timedelta(hours=5, minutes=30))
 
-# --- WATCHLIST ---
+# --- ASSETS & TIMEFRAMES ---
 ALL_ASSETS = {
     "XAU/USD": "GC=F",
     "BTC/USDT": "BTC-USD",
@@ -26,6 +26,11 @@ ALL_ASSETS = {
     "EUR/USD": "EURUSD=X",
     "GBP/USD": "GBPUSD=X",
     "USD/JPY": "USDJPY=X",
+}
+
+TIMEFRAMES = {
+    "15m": "59d",  # Yahoo Finance max for 15m is ~60 days
+    "1h": "730d",   # Yahoo Finance max for 1h is 730 days
 }
 
 LOG_FILE = "trade_log.csv"
@@ -61,13 +66,14 @@ def check_active_trades():
                 continue
 
             label = row["asset"]
+            tf = row.get("timeframe", "1h")
             ticker = ALL_ASSETS.get(label)
             if not ticker:
                 updated_rows.append(row)
                 continue
 
             df_recent = yf.download(
-                ticker, period="5d", interval="1d", progress=False
+                ticker, period="3d", interval=tf, progress=False
             )
             if df_recent.empty:
                 updated_rows.append(row)
@@ -88,8 +94,9 @@ def check_active_trades():
                 if latest_high >= tp:
                     hit_status = "TP_HIT"
                     msg = (
-                        f"🎯 **TAKE PROFIT HIT** 🎯\n\n"
+                        f"🎯 **TAKE PROFIT HIT ({tf})** 🎯\n\n"
                         f"**Asset:** `{label}`\n"
+                        f"**Timeframe:** `{tf}`\n"
                         f"**Direction:** `LONG`\n"
                         f"**Entry Price:** `{row['entry_price']}`\n"
                         f"**Target Hit (TP):** `{tp}`\n"
@@ -100,8 +107,9 @@ def check_active_trades():
                 elif latest_low <= sl:
                     hit_status = "SL_HIT"
                     msg = (
-                        f"🛑 **STOP LOSS HIT** 🛑\n\n"
+                        f"🛑 **STOP LOSS HIT ({tf})** 🛑\n\n"
                         f"**Asset:** `{label}`\n"
+                        f"**Timeframe:** `{tf}`\n"
                         f"**Direction:** `LONG`\n"
                         f"**Entry Price:** `{row['entry_price']}`\n"
                         f"**Stop Loss Hit (SL):** `{sl}`\n"
@@ -113,8 +121,9 @@ def check_active_trades():
                 if latest_low <= tp:
                     hit_status = "TP_HIT"
                     msg = (
-                        f"🎯 **TAKE PROFIT HIT** 🎯\n\n"
+                        f"🎯 **TAKE PROFIT HIT ({tf})** 🎯\n\n"
                         f"**Asset:** `{label}`\n"
+                        f"**Timeframe:** `{tf}`\n"
                         f"**Direction:** `SHORT`\n"
                         f"**Entry Price:** `{row['entry_price']}`\n"
                         f"**Target Hit (TP):** `{tp}`\n"
@@ -125,8 +134,9 @@ def check_active_trades():
                 elif latest_high >= sl:
                     hit_status = "SL_HIT"
                     msg = (
-                        f"🛑 **STOP LOSS HIT** 🛑\n\n"
+                        f"🛑 **STOP LOSS HIT ({tf})** 🛑\n\n"
                         f"**Asset:** `{label}`\n"
+                        f"**Timeframe:** `{tf}`\n"
                         f"**Direction:** `SHORT`\n"
                         f"**Entry Price:** `{row['entry_price']}`\n"
                         f"**Stop Loss Hit (SL):** `{sl}`\n"
@@ -143,9 +153,10 @@ def check_active_trades():
         print(f"Error checking active trades: {e}")
 
 
-def log_new_trade(label, direction, entry, tp, sl, timestamp):
+def log_new_trade(label, tf, direction, entry, tp, sl, timestamp):
     new_row = {
         "asset": label,
+        "timeframe": tf,
         "direction": direction,
         "entry_price": entry,
         "tp": tp,
@@ -160,7 +171,9 @@ def log_new_trade(label, direction, entry, tp, sl, timestamp):
                 df_log = pd.DataFrame([new_row])
             else:
                 if not df_log[
-                    (df_log["asset"] == label) & (df_log["status"] == "OPEN")
+                    (df_log["asset"] == label) & 
+                    (df_log["timeframe"] == tf) & 
+                    (df_log["status"] == "OPEN")
                 ].empty:
                     return
                 df_log = pd.concat([df_log, pd.DataFrame([new_row])], ignore_index=True)
@@ -206,7 +219,7 @@ def compute_indicators(df):
 
 
 def run_live_scanner():
-    print("🚀 Running Optimized Market Scanner (IST Timezone | 55% Threshold)...")
+    print("🚀 Running Multi-Timeframe Intraday Scanner (15M & 1H | 55% Threshold)...")
 
     check_active_trades()
 
@@ -223,103 +236,105 @@ def run_live_scanner():
         "volume",
     ]
 
-    for label, ticker in ALL_ASSETS.items():
-        try:
-            df = yf.download(ticker, period="2y", interval="1d", progress=False)
-            if df.empty:
-                continue
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
+    for tf, period in TIMEFRAMES.items():
+        print(f"\n--- Scanning Timeframe: {tf} ---")
+        for label, ticker in ALL_ASSETS.items():
+            try:
+                df = yf.download(ticker, period=period, interval=tf, progress=False)
+                if df.empty:
+                    continue
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
 
-            df = df.rename(
-                columns={
-                    "Open": "open",
-                    "High": "high",
-                    "Low": "low",
-                    "Close": "close",
-                    "Volume": "volume",
-                }
-            )
+                df = df.rename(
+                    columns={
+                        "Open": "open",
+                        "High": "high",
+                        "Low": "low",
+                        "Close": "close",
+                        "Volume": "volume",
+                    }
+                )
 
-            if "volume" in df.columns:
-                df["volume"] = df["volume"].fillna(0)
-            else:
-                df["volume"] = 0
+                if "volume" in df.columns:
+                    df["volume"] = df["volume"].fillna(0)
+                else:
+                    df["volume"] = 0
 
-            df = (
-                df[["open", "high", "low", "close", "volume"]]
-                .astype(float)
-                .dropna()
-            )
-            if len(df) < 200:
-                print(f"⚠️ Skipped {label}: Insufficient data (<200 rows)")
-                continue
+                df = (
+                    df[["open", "high", "low", "close", "volume"]]
+                    .astype(float)
+                    .dropna()
+                )
+                if len(df) < 200:
+                    continue
 
-            df = compute_indicators(df)
+                df = compute_indicators(df)
 
-            X = df[feature_columns]
-            y = df["target"]
+                X = df[feature_columns]
+                y = df["target"]
 
-            model = RandomForestClassifier(
-                n_estimators=200,
-                max_depth=5,
-                min_samples_split=30,
-                random_state=42,
-            )
-            model.fit(X, y)
+                model = RandomForestClassifier(
+                    n_estimators=200,
+                    max_depth=5,
+                    min_samples_split=30,
+                    random_state=42,
+                )
+                model.fit(X, y)
 
-            latest_row = df.iloc[[-1]]
-            X_latest = latest_row[feature_columns]
-            pred = model.predict(X_latest)[0]
-            proba = model.predict_proba(X_latest)[0]
-            conf = max(proba) * 100
+                latest_row = df.iloc[[-1]]
+                X_latest = latest_row[feature_columns]
+                pred = model.predict(X_latest)[0]
+                proba = model.predict_proba(X_latest)[0]
+                conf = max(proba) * 100
 
-            current_price = float(latest_row["close"].values[0])
-            trend = int(latest_row["trend_filter"].values[0])
-            atr = float(latest_row["atr"].values[0])
-            
-            # --- GENERATE TIMESTAMP IN IST ---
-            entry_time = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
+                current_price = float(latest_row["close"].values[0])
+                trend = int(latest_row["trend_filter"].values[0])
+                atr = float(latest_row["atr"].values[0])
+                
+                entry_time = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
 
-            print(f"🔍 [Scan] {label} | Price: {current_price:.5g} | Conf: {conf:.1f}% | Trend: {trend} | Pred: {pred}")
+                print(f"🔍 [{tf}] {label} | Price: {current_price:.5g} | Conf: {conf:.1f}% | Trend: {trend} | Pred: {pred}")
 
-            if conf >= 55.0:
-                if pred == 1 and trend == 1:
-                    sl = current_price - (1.0 * atr)
-                    tp = current_price + (2.0 * atr)
-                    log_new_trade(label, "LONG", current_price, tp, sl, entry_time)
-                    msg = (
-                        f"🚨 **OPTIMIZED BUY SIGNAL (IST | 55%+ Conf)** 🚨\n\n"
-                        f"**Asset:** `{label}`\n"
-                        f"**Time:** `{entry_time}`\n"
-                        f"**Entry Price:** `{current_price:.5g}`\n"
-                        f"**Take Profit:** `{tp:.5g}`\n"
-                        f"**Stop Loss:** `{sl:.5g}`\n"
-                        f"**Confidence:** `{conf:.1f}%`\n"
-                        f"**Strategy:** Trend-Aligned Long"
-                    )
-                    send_telegram_alert(msg)
-                    print(f"Signal sent for {label} (BUY)")
+                if conf >= 55.0:
+                    if pred == 1 and trend == 1:
+                        sl = current_price - (1.0 * atr)
+                        tp = current_price + (2.0 * atr)
+                        log_new_trade(label, tf, "LONG", current_price, tp, sl, entry_time)
+                        msg = (
+                            f"🚨 **BUY SIGNAL ({tf})** 🚨\n\n"
+                            f"**Asset:** `{label}`\n"
+                            f"**Timeframe:** `{tf}`\n"
+                            f"**Time:** `{entry_time}`\n"
+                            f"**Entry Price:** `{current_price:.5g}`\n"
+                            f"**Take Profit:** `{tp:.5g}`\n"
+                            f"**Stop Loss:** `{sl:.5g}`\n"
+                            f"**Confidence:** `{conf:.1f}%`\n"
+                            f"**Strategy:** Trend-Aligned Long"
+                        )
+                        send_telegram_alert(msg)
+                        print(f"Signal sent for {label} ({tf} BUY)")
 
-                elif pred == 0 and trend == 0:
-                    sl = current_price + (1.0 * atr)
-                    tp = current_price - (2.0 * atr)
-                    log_new_trade(label, "SHORT", current_price, tp, sl, entry_time)
-                    msg = (
-                        f"🚨 **OPTIMIZED SELL SIGNAL (IST | 55%+ Conf)** 🚨\n\n"
-                        f"**Asset:** `{label}`\n"
-                        f"**Time:** `{entry_time}`\n"
-                        f"**Entry Price:** `{current_price:.5g}`\n"
-                        f"**Take Profit:** `{tp:.5g}`\n"
-                        f"**Stop Loss:** `{sl:.5g}`\n"
-                        f"**Confidence:** `{conf:.1f}%`\n"
-                        f"**Strategy:** Trend-Aligned Short"
-                    )
-                    send_telegram_alert(msg)
-                    print(f"Signal sent for {label} (SELL)")
+                    elif pred == 0 and trend == 0:
+                        sl = current_price + (1.0 * atr)
+                        tp = current_price - (2.0 * atr)
+                        log_new_trade(label, tf, "SHORT", current_price, tp, sl, entry_time)
+                        msg = (
+                            f"🚨 **SELL SIGNAL ({tf})** 🚨\n\n"
+                            f"**Asset:** `{label}`\n"
+                            f"**Timeframe:** `{tf}`\n"
+                            f"**Time:** `{entry_time}`\n"
+                            f"**Entry Price:** `{current_price:.5g}`\n"
+                            f"**Take Profit:** `{tp:.5g}`\n"
+                            f"**Stop Loss:** `{sl:.5g}`\n"
+                            f"**Confidence:** `{conf:.1f}%`\n"
+                            f"**Strategy:** Trend-Aligned Short"
+                        )
+                        send_telegram_alert(msg)
+                        print(f"Signal sent for {label} ({tf} SELL)")
 
-        except Exception as e:
-            print(f"Error scanning {label}: {e}")
+            except Exception as e:
+                print(f"Error scanning {label} on {tf}: {e}")
 
 
 if __name__ == "__main__":

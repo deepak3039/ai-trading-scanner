@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timezone, timedelta
+from sklearn.ensemble import RandomForestClassifier
 
 # --- TELEGRAM CONFIGURATION ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")

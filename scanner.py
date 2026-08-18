@@ -3,12 +3,14 @@ import requests
 import numpy as np
 import pandas as pd
 import yfinance as yf
-from datetime import datetime, timezone
-from sklearn.ensemble import RandomForestClassifier
+from datetime import datetime, timezone, timedelta
 
 # --- TELEGRAM CONFIGURATION ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
+
+# --- TIMEZONE CONFIGURATION (IST) ---
+IST = timezone(timedelta(hours=5, minutes=30))
 
 # --- WATCHLIST ---
 ALL_ASSETS = {
@@ -203,7 +205,7 @@ def compute_indicators(df):
 
 
 def run_live_scanner():
-    print("🚀 Running Optimized Market Scanner (55% Threshold & 2:1 R:R)...")
+    print("🚀 Running Optimized Market Scanner (IST Timezone | 55% Threshold)...")
 
     check_active_trades()
 
@@ -274,18 +276,19 @@ def run_live_scanner():
             current_price = float(latest_row["close"].values[0])
             trend = int(latest_row["trend_filter"].values[0])
             atr = float(latest_row["atr"].values[0])
-            entry_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            
+            # --- GENERATE TIMESTAMP IN IST ---
+            entry_time = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
 
             print(f"🔍 [Scan] {label} | Price: {current_price:.5g} | Conf: {conf:.1f}% | Trend: {trend} | Pred: {pred}")
 
-            # --- LOWERED THRESHOLD TO 55.0% ---
             if conf >= 55.0:
                 if pred == 1 and trend == 1:
                     sl = current_price - (1.0 * atr)
                     tp = current_price + (2.0 * atr)
                     log_new_trade(label, "LONG", current_price, tp, sl, entry_time)
                     msg = (
-                        f"🚨 **OPTIMIZED BUY SIGNAL (55%+ Conf | 2:1 R:R)** 🚨\n\n"
+                        f"🚨 **OPTIMIZED BUY SIGNAL (IST | 55%+ Conf)** 🚨\n\n"
                         f"**Asset:** `{label}`\n"
                         f"**Time:** `{entry_time}`\n"
                         f"**Entry Price:** `{current_price:.5g}`\n"
@@ -302,7 +305,7 @@ def run_live_scanner():
                     tp = current_price - (2.0 * atr)
                     log_new_trade(label, "SHORT", current_price, tp, sl, entry_time)
                     msg = (
-                        f"🚨 **OPTIMIZED SELL SIGNAL (55%+ Conf | 2:1 R:R)** 🚨\n\n"
+                        f"🚨 **OPTIMIZED SELL SIGNAL (IST | 55%+ Conf)** 🚨\n\n"
                         f"**Asset:** `{label}`\n"
                         f"**Time:** `{entry_time}`\n"
                         f"**Entry Price:** `{current_price:.5g}`\n"

@@ -238,7 +238,6 @@ def run_live_scanner():
                 }
             )
 
-            # Fix for missing/NaN volume on Forex and Gold
             if "volume" in df.columns:
                 df["volume"] = df["volume"].fillna(0)
             else:
@@ -250,6 +249,7 @@ def run_live_scanner():
                 .dropna()
             )
             if len(df) < 200:
+                print(f"⚠️ Skipped {label}: Insufficient data (<200 rows)")
                 continue
 
             df = compute_indicators(df)
@@ -271,20 +271,19 @@ def run_live_scanner():
             proba = model.predict_proba(X_latest)[0]
             conf = max(proba) * 100
 
-            if conf >= 60.0:
-                current_price = float(latest_row["close"].values[0])
-                trend = int(latest_row["trend_filter"].values[0])
-                atr = float(latest_row["atr"].values[0])
-                entry_time = datetime.now(timezone.utc).strftime(
-                    "%Y-%m-%d %H:%M:%S UTC"
-                )
+            current_price = float(latest_row["close"].values[0])
+            trend = int(latest_row["trend_filter"].values[0])
+            atr = float(latest_row["atr"].values[0])
+            entry_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
+            # --- TRANSPARENCY DEBUG LOG ---
+            print(f"🔍 [Scan] {label} | Price: {current_price:.5g} | Conf: {conf:.1f}% | Trend: {trend} | Pred: {pred}")
+
+            if conf >= 60.0:
                 if pred == 1 and trend == 1:
                     sl = current_price - (1.0 * atr)
-                    tp = current_price + (2.0 * atr)  # Optimized to 2:1 R:R
-                    log_new_trade(
-                        label, "LONG", current_price, tp, sl, entry_time
-                    )
+                    tp = current_price + (2.0 * atr)
+                    log_new_trade(label, "LONG", current_price, tp, sl, entry_time)
                     msg = (
                         f"🚨 **OPTIMIZED BUY SIGNAL (2:1 R:R)** 🚨\n\n"
                         f"**Asset:** `{label}`\n"
@@ -300,10 +299,8 @@ def run_live_scanner():
 
                 elif pred == 0 and trend == 0:
                     sl = current_price + (1.0 * atr)
-                    tp = current_price - (2.0 * atr)  # Optimized to 2:1 R:R
-                    log_new_trade(
-                        label, "SHORT", current_price, tp, sl, entry_time
-                    )
+                    tp = current_price - (2.0 * atr)
+                    log_new_trade(label, "SHORT", current_price, tp, sl, entry_time)
                     msg = (
                         f"🚨 **OPTIMIZED SELL SIGNAL (2:1 R:R)** 🚨\n\n"
                         f"**Asset:** `{label}`\n"

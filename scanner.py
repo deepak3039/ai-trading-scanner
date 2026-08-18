@@ -203,7 +203,7 @@ def compute_indicators(df):
 
 
 def run_live_scanner():
-    print("🚀 Running Optimized Market Scanner & R:R-Balanced Tracker...")
+    print("🚀 Running Optimized Market Scanner (55% Threshold & 2:1 R:R)...")
 
     check_active_trades()
 
@@ -276,16 +276,16 @@ def run_live_scanner():
             atr = float(latest_row["atr"].values[0])
             entry_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-            # --- TRANSPARENCY DEBUG LOG ---
             print(f"🔍 [Scan] {label} | Price: {current_price:.5g} | Conf: {conf:.1f}% | Trend: {trend} | Pred: {pred}")
 
-            if conf >= 60.0:
+            # --- LOWERED THRESHOLD TO 55.0% ---
+            if conf >= 55.0:
                 if pred == 1 and trend == 1:
                     sl = current_price - (1.0 * atr)
                     tp = current_price + (2.0 * atr)
                     log_new_trade(label, "LONG", current_price, tp, sl, entry_time)
                     msg = (
-                        f"🚨 **OPTIMIZED BUY SIGNAL (2:1 R:R)** 🚨\n\n"
+                        f"🚨 **OPTIMIZED BUY SIGNAL (55%+ Conf | 2:1 R:R)** 🚨\n\n"
                         f"**Asset:** `{label}`\n"
                         f"**Time:** `{entry_time}`\n"
                         f"**Entry Price:** `{current_price:.5g}`\n"
@@ -302,7 +302,7 @@ def run_live_scanner():
                     tp = current_price - (2.0 * atr)
                     log_new_trade(label, "SHORT", current_price, tp, sl, entry_time)
                     msg = (
-                        f"🚨 **OPTIMIZED SELL SIGNAL (2:1 R:R)** 🚨\n\n"
+                        f"🚨 **OPTIMIZED SELL SIGNAL (55%+ Conf | 2:1 R:R)** 🚨\n\n"
                         f"**Asset:** `{label}`\n"
                         f"**Time:** `{entry_time}`\n"
                         f"**Entry Price:** `{current_price:.5g}`\n"
